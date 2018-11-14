@@ -1,7 +1,11 @@
 # -*- coding: UTF-8 -*-
 
+import random
+from six.moves import xrange
+import numpy as np
+import utils.data_utils as data_utils
 
-def get_batch(self, train_data, bucket_id, batch_size, type=0):
+def get_batch(model, train_data, bucket_id, batch_size, type=0):
     """Get a random batch of data from the specified bucket, prepare for step.
     To feed data in step(..) it must be a list of batch-major vectors, while
     data here contains single length-major cases. So the main logic of this
@@ -15,7 +19,7 @@ def get_batch(self, train_data, bucket_id, batch_size, type=0):
       the constructed batch that has the proper format to call step(...) later.
     """
 
-    encoder_size, decoder_size = self.buckets[bucket_id]
+    encoder_size, decoder_size = model.buckets[bucket_id]
     encoder_inputs, decoder_inputs = [], []
 
     # Get a random batch of encoder and decoder inputs from data, 用到的type都是0，都是从桶里随机挑一组

@@ -70,7 +70,8 @@ class GenModel(object):
             # 几何意义是 batch 中所有数据下标为 i 的元素组成的列表
             encoder_inputs.append(tf.placeholder(tf.int32, shape=[None], name="encoder{0}".format(i)))
 
-        # 长度加一表示在所有序列最后额外添加一个 last_target（EOS，用0表示）
+        # 长度加一表示在所有序列最后额外添加一个 last_target（用0表示，PAD_ID，只作占位？）
+        # TODO(Zhu) 其他地方我描述这个 last_target 是 EOS，可能是错误的。这里应该只是一个占位的PAD，防止target移进的时候下标越界
         for i in xrange(self.buckets[-1][1] + 1):
             decoder_inputs.append(tf.placeholder(tf.int32, shape=[None], name="decoder{0}".format(i)))
 
