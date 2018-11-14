@@ -70,16 +70,17 @@ class GenModel(object):
             # 几何意义是 batch 中所有数据下标为 i 的元素组成的列表
             encoder_inputs.append(tf.placeholder(tf.int32, shape=[None], name="encoder{0}".format(i)))
 
-        # 长度加一表示在所有序列最后额外添加一个 last_target（zero，在下面会有定义）
+        # 长度加一表示在所有序列最后额外添加一个 last_target（EOS，用0表示）
         for i in xrange(self.buckets[-1][1] + 1):
             decoder_inputs.append(tf.placeholder(tf.int32, shape=[None], name="decoder{0}".format(i)))
 
-            # target_weights 是一个与 decoder_outputs 大小一样的 0-1 矩阵。该矩阵将目标序列长度以外的其他位置填充为标量值 0
+            # target_weights 是一个与 decoder_outputs 大小一样的 0-1 矩阵 (decoder_size + 1)
+            # 该矩阵将目标序列长度以外的其他位置填充为标量值 0
             target_weights.append(tf.placeholder(self.dtype, shape=[None], name="weight{0}".format(i)))
 
         reward = [tf.placeholder(tf.float32, name="reward_%i" % i) for i in range(len(self.buckets))]
 
-        # target 是 decoder_inputs 移进一个元素
+        # target 是 decoder_inputs 移进一个元素 (长度为 decoder_size)
         targets = [decoder_inputs[i + 1] for i in xrange(len(decoder_inputs) - 1)]
 
         self.encoder_inputs, \
@@ -102,7 +103,30 @@ class GenModel(object):
         self.outputs, self.losses, self.encoder_state = self._rl_seq2seq_model(cell)
 
         # （误差信息的反向传播）如果不是测试阶段，需要使用策略梯度下降法来更新参数
-        if not forward_only: self._back_propagation(name_scope)
+        if not forward_only:
+            with tf.name_scope("gradient_descent"):
+                self.gradient_norms = []  # 梯度的范数
+                self.updates = []  # 用后向传播更新参数，列表中第i个元素表示graph{i}的后向传播梯度更新操作
+                self.aj_losses = []
+                self.gen_params = [p for p in tf.trainable_variables() if name_scope in p.name]  # 生成器要训练的参数
+                opt = tf.train.AdamOptimizer()
+
+                for b in xrange(len(self.buckets)):  # 依次使用每个桶的数据进行训练
+                    # 由之前代码可知 self.reward 是一个类型为 float 的一维数组，每个桶有一个奖励值
+                    R = tf.subtract(self.reward[b], self.reward_bias)  # 计算奖励
+                    # TODO(Zhu) 这个adjusted_loss什么意思？使用策略调整的损失？
+                    adjusted_loss = tf.cond(self.up_reward,
+                                            lambda: tf.multiply(self.losses[b], self.reward[b]),
+                                            lambda: self.losses[b])
+                    self.aj_losses.append(adjusted_loss)  # 保存每一步的损失
+                    gradients = tf.gradients(adjusted_loss, self.gen_params)  # 计算损失函数关于参数的梯度
+                    clipped_gradients, norm = tf.clip_by_global_norm(gradients,
+                                                                     self.max_gradient_norm)  # 防止梯度爆炸
+                    self.gradient_norms.append(norm)
+                    self.updates.append(opt.apply_gradients(
+                        zip(clipped_gradients, self.gen_params), global_step=self.global_step))  # 更新参数
+                    # ↑ 当前定义了length(buckets)个graph，故self.updates是一个列表对象，尺寸为length(buckets)，
+                    # ↑ 列表中第i个元素表示graph{i}的梯度更新操作
 
     def _rl_seq2seq_model(self, cell):
         """
@@ -134,6 +158,9 @@ class GenModel(object):
             output_projection=output_projection, softmax_loss_function=softmax_loss_function)
 
         # 如果使用了 output_protection，需要投影输出以解码
+        # 如果forward_only为true的话，outputs 一开始的形状是[bucket_num, num_steps, batch_size, emb_dim或rnn_size]
+        # 如果forward_only为false的话，或者经过投影层转换后
+        # outputs 的形状是[bucket_num, num_steps或decoder_size, batch_size, target_vocab_size]，也就是所有时间步的预测概率
         for b in xrange(len(self.buckets)):
             outputs[b] = [
                 tf.cond(
@@ -158,7 +185,7 @@ class GenModel(object):
             w_t = tf.get_variable("proj_w", [self.target_vocab_size, self.emb_dim], dtype=self.dtype)
             w = tf.transpose(w_t)  # [emb_dim, target_vocab_size]
             b = tf.get_variable("proj_b", [self.target_vocab_size], dtype=self.dtype)
-            output_projection = (w, b)  # WX+B
+            output_projection = (w, b)  # XW+B 注意这里w是转置后的
 
             def sampled_loss(inputs, labels):
                 labels = tf.reshape(labels, [-1, 1])  # 全部展开为二维数组，第二维是正确的类别，对于每个预测单词来说正确的只有一个
@@ -174,31 +201,6 @@ class GenModel(object):
             softmax_loss_function = sampled_loss
 
         return output_projection, softmax_loss_function
-
-    def _back_propagation(self, name_scope):
-        with tf.name_scope("gradient_descent"):
-            self.gradient_norms = []  # 梯度的范数
-            self.updates = []  # 用后向传播更新参数，列表中第i个元素表示graph{i}的后向传播梯度更新操作
-            self.aj_losses = []
-            self.gen_params = [p for p in tf.trainable_variables() if name_scope in p.name]  # 生成器要训练的参数
-            opt = tf.train.AdamOptimizer()
-
-            for b in xrange(len(self.buckets)):  # 依次使用每个桶的数据进行训练
-                # 由之前代码可知 self.reward 是一个类型为 float 的一维数组，每个桶有一个奖励值
-                R = tf.subtract(self.reward[b], self.reward_bias)  # 计算奖励
-                # TODO(Zhu) 这个adjusted_loss什么意思？使用策略调整的损失？
-                adjusted_loss = tf.cond(self.up_reward,
-                                        lambda: tf.multiply(self.losses[b], self.reward[b]),
-                                        lambda: self.losses[b])
-                self.aj_losses.append(adjusted_loss)  # 保存每一步的损失
-                gradients = tf.gradients(adjusted_loss, self.gen_params)  # 计算损失函数关于参数的梯度
-                clipped_gradients, norm = tf.clip_by_global_norm(gradients,
-                                                                 self.max_gradient_norm)  # 防止梯度爆炸
-                self.gradient_norms.append(norm)
-                self.updates.append(opt.apply_gradients(
-                    zip(clipped_gradients, self.gen_params), global_step=self.global_step))  # 更新参数
-                # ↑ 当前定义了length(buckets)个graph，故self.updates是一个列表对象，尺寸为length(buckets)，
-                # ↑ 列表中第i个元素表示graph{i}的梯度更新操作
 
     def _saver(self, name_scope):
         """
