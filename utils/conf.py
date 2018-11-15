@@ -2,6 +2,7 @@ import os
 
 # configuration options for discriminator network
 class disc_config(object):
+    max_pre_train_step = 200 # 预训练的时候最多训练多少次
     batch_size = 256
     lr = 0.2
     lr_decay = 0.9
@@ -15,7 +16,6 @@ class disc_config(object):
     name_loss = "disc_loss"
     max_len = 50
     steps_per_checkpoint = 100
-    max_pre_train_step = 20000 # 预训练的时候最多训练多少次
     piece_size = batch_size * steps_per_checkpoint
     piece_dir = "./disc_data/batch_piece/"
     #query_len = 0
@@ -31,6 +31,7 @@ class disc_config(object):
 
 # configuration options for generator network
 class gen_config(object):
+    max_pre_train_step = 200 # 预训练的时候最多训练多少次
     beam_size = 7
     learning_rate = 0.5
     learning_rate_decay_factor = 0.99

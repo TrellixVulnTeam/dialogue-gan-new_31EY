@@ -19,20 +19,22 @@ class HierRNNTrain(object):
         self.config_disc = disc_config
         self.config_evl = copy.deepcopy(disc_config) # TODO(Zhu) 重构前这里是通过引用直接赋值，不知道有什么影响
         self.config_evl.keep_prob = 1.0 # TODO(Zhu) config_evl这个参数好像没有使用到，不知道有什么用
-        self.query_set, \
-        self.answer_set, \
-        self.gen_set, \
-        self.train_buckets_scale = self._get_dataset()
 
-    def train(self):
+    def pre_train(self):
         """
-        训练判别器：三步走
+        预训练判别器
         :return:
         """
         print(just("Begin training"))
         with tf.Session() as session:
             # ① 创建模型
             model = self._create_model(session, self.config_disc, name_scope=self.config_disc.name_model)
+
+            # ② 获取数据集
+            self.query_set, \
+            self.answer_set, \
+            self.gen_set, \
+            self.train_buckets_scale = self._get_dataset()
 
             # [Ignore]... log相关
             step_time, loss = 0.0, 0.0
@@ -43,12 +45,14 @@ class HierRNNTrain(object):
             while current_step <= self.config_disc.max_pre_train_step:
                 start_time = time.time() # [Ignore]... log相关：开始时间
 
-                # ② 获取训练数据
+                # ③ 获取一个batch的训练数据
                 bucket_id = self._get_random_bid()
                 train_query, train_answer, train_labels = self._get_batch(bucket_id)
+
+                # ④ 获取处理后的输入数据
                 feed_dict = self._get_feed_dict(model, bucket_id, train_query, train_answer, train_labels)
 
-                # ③ 进行训练
+                # ⑤ 选择训练OP，进行训练
                 fetches = [model.b_train_op[bucket_id], model.b_logits[bucket_id], model.b_loss[bucket_id], model.target]
                 train_op, logits, step_loss, target = session.run(fetches, feed_dict)
 
@@ -117,7 +121,7 @@ class HierRNNTrain(object):
                 print(just("Reading Hier Disc model parameters from %s" % ckpt.model_checkpoint_path))
                 model.saver.restore(sess, ckpt.model_checkpoint_path)
             else:
-                print("Created Hier Disc model with fresh parameters.")
+                print(just("Created Hier Disc model with fresh parameters."))
                 disc_global_variables = [gv for gv in tf.global_variables() if name_scope in gv.name]
                 sess.run(tf.variables_initializer(disc_global_variables))
             return model
