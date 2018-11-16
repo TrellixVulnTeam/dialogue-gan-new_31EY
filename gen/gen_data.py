@@ -6,6 +6,7 @@ from six.moves import xrange
 import numpy as np
 from tensorflow.python.platform import gfile
 import utils.data_utils as data_utils
+from utils.utils import just_message as just
 
 
 def get_dataset(gen_config):
@@ -19,17 +20,17 @@ def get_dataset(gen_config):
     data_utils.create_vocabulary(vocab_path, voc_file_path, gen_config.vocab_size)
     vocab, rev_vocab = data_utils.initialize_vocabulary(vocab_path)  # {dog: 0, cat: 1} [dog, cat]
 
-    print("Preparing Chitchat gen_data in %s" % gen_config.train_dir)
+    print(just("Preparing Chitchat gen_data in %s" % gen_config.train_dir))
     train_query, train_answer, dev_query, dev_answer = data_utils.prepare_chitchat_data(
         gen_config.train_dir, vocab, gen_config.vocab_size)
 
     # Read disc_data into buckets and compute their sizes.
-    print("Reading development and training gen_data (limit: %d)."
-          % gen_config.max_train_data_size)
+    print(just("Reading development and training gen_data (limit: %d)."
+          % gen_config.max_train_data_size))
     dev_set = read_data(gen_config, dev_query, dev_answer)
     train_set = read_data(gen_config, train_query, train_answer, gen_config.max_train_data_size)
 
-    return  vocab, rev_vocab, dev_set, train_set
+    return vocab, rev_vocab, dev_set, train_set
 
 
 def read_data(config, source_path, target_path, max_size=None):
@@ -64,17 +65,17 @@ def read_data(config, source_path, target_path, max_size=None):
 
 
 def get_batch(model, train_data, bucket_id, batch_size, type=0):
-    """Get a random batch of data from the specified bucket, prepare for step.
-    To feed data in step(..) it must be a list of batch-major vectors, while
-    data here contains single length-major cases. So the main logic of this
-    function is to re-index data cases to be in the proper format for feeding.
+    """
+    从一个指定的桶中获取一个随机的batch，用于step(..)的训练。step(..)接受的数据是time-major的
     Args:
-      data: a tuple of size len(self.buckets) in which each element contains
-        lists of pairs of input and output data that we use to create a batch.
+      train_data: 大小是分桶个数的列表，每个元素是一个列表，由(Q, A)对组成
       bucket_id: integer, which bucket to get the batch for.
+      type: - 0：正常的获取预训练用的数据
+            - 1：TODO 好像没用
+            - 2：对抗训练中判别器的训练数据，这个也好像没用
     Returns:
-      The triple (encoder_inputs, decoder_inputs, target_weights) for
-      the constructed batch that has the proper format to call step(...) later.
+      (batch_encoder_inputs, batch_decoder_inputs, batch_weights, batch_source_encoder, batch_source_decoder)
+      依次是(time-major，time-major，time-major, batch-major, batch-major)
     """
 
     encoder_size, decoder_size = model.buckets[bucket_id]

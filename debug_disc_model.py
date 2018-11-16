@@ -8,24 +8,10 @@ from hier_rnn_model import HierRNNModel
 os.environ["CUDA_VISIBLE_DEVICES"] = "3"
 
 
-class Config(object):
-    embed_dim = 12
-    lr = 0.1
-    num_class = 2
-    train_dir = './disc_data/'
-    name_model = "disc_model_temp" # 使用一个临时的name_scope进行测试，防止训练已有模型中的参
-    tensorboard_dir = "./tensorboard/disc_log/"
-    name_loss = "disc_loss"
-    num_layers = 3
-    vocab_size = 10
-    max_len = 50
-    batch_size = 1
-    init_scale = 0.1
-    buckets = [(5, 10), (10, 15), (20, 25), (40, 50), (50, 50)]
-    max_grad_norm = 5
-
-
 def main(_):
+    """
+    测试判别器模型：只构建图，不作真实训练，方便打断点查看图的结构
+    """
     with tf.Session() as sess:
         query = [[1],[2],[3],[4],[5]]
         answer = [[6],[7],[8],[9],[0],[0],[0],[0],[0],[0]]
@@ -48,6 +34,24 @@ def main(_):
         print("query: ", np.shape(query))
 
     pass
+
+
+class Config(object):
+    embed_dim = 12
+    lr = 0.1
+    num_class = 2
+    train_dir = './disc_data/'
+    name_model = "disc_model_temp" # 使用一个临时的name_scope进行测试，防止训练已有模型中的参
+    tensorboard_dir = "./tensorboard/disc_log/"
+    name_loss = "disc_loss"
+    num_layers = 3
+    vocab_size = 10
+    max_len = 50
+    batch_size = 1
+    init_scale = 0.1
+    buckets = [(5, 10), (10, 15), (20, 25), (40, 50), (50, 50)]
+    max_grad_norm = 5
+
 
 if __name__ == '__main__':
     tf.app.run()

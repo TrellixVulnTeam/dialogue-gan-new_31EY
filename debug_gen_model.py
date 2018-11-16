@@ -1,4 +1,5 @@
 # -*- coding: UTF-8 -*-
+
 import tensorflow as tf
 import numpy as np
 import os
@@ -9,27 +10,10 @@ from six.moves import xrange
 os.environ["CUDA_VISIBLE_DEVICES"] = "3"
 
 
-class Config(object):
-    emb_dim = 1
-    train_dir = './gen_data/'
-    name_model = "gen_model_temp" # 使用一个临时的name_scope进行测试，防止训练已有模型中的参
-    tensorboard_dir = "./tensorboard/gen_log/"
-    name_loss = "gen_loss"
-    num_layers = 2
-    vocab_size = 9
-    batch_size = 1
-    beam_size = 3
-    learning_rate = 0.5
-    learning_rate_decay_factor = 0.99
-    max_gradient_norm = 5.0
-    teacher_loss = "teacher_loss"
-    reward_name = "reward"
-    max_train_data_size = 0
-    steps_per_checkpoint = 100
-    buckets = [(5, 10), (10, 15), (20, 25), (40, 50)]
-
-
 def main(_):
+    """
+    测试生成器模型：只构建图，不作真实训练，方便打断点查看图的结构
+    """
     with tf.Session() as sess:
         query = [[1],[2],[3],[4],[5]]
         answer = [[6],[7],[8],[9],[0],[0],[0],[0],[0],[0]]
@@ -72,6 +56,27 @@ def main(_):
         return outputs[1], outputs[2], outputs[0]  # Gradient norm, loss, no outputs.
 
     pass
+
+
+class Config(object):
+    emb_dim = 1
+    train_dir = './gen_data/'
+    name_model = "gen_model_temp" # 使用一个临时的name_scope进行测试，防止训练已有模型中的参数
+    tensorboard_dir = "./tensorboard/gen_log/"
+    name_loss = "gen_loss"
+    num_layers = 2
+    vocab_size = 9
+    batch_size = 1
+    beam_size = 3
+    learning_rate = 0.5
+    learning_rate_decay_factor = 0.99
+    max_gradient_norm = 5.0
+    teacher_loss = "teacher_loss"
+    reward_name = "reward"
+    max_train_data_size = 0
+    steps_per_checkpoint = 100
+    buckets = [(5, 10), (10, 15), (20, 25), (40, 50)]
+
 
 if __name__ == '__main__':
     tf.app.run()

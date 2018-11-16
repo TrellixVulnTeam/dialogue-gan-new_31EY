@@ -18,7 +18,31 @@ class HierRNNTrain(object):
     def __init__(self):
         self.config_disc = disc_config
         self.config_evl = copy.deepcopy(disc_config) # TODO(Zhu) 重构前这里是通过引用直接赋值，不知道有什么影响
-        self.config_evl.keep_prob = 1.0 # TODO(Zhu) config_evl这个参数好像没有使用到，不知道有什么用
+        self.config_evl.keep_prob = 1.0 # TODO(Zhu) config_evl这个参数好像没有使用到，不知道有什么用。所以上面好像没有什么影响？
+
+    @staticmethod
+    def create_model(sess, config, name_scope, initializer=None):
+        """
+        创建判别模型：如果已经有训练好的，读入；否则，初始化
+        :param sess:
+        :param config:
+        :param name_scope: 也就是config.name_model
+        :param initializer:
+        :return:
+        """
+        print(just("Creating disc model"))
+        with tf.variable_scope(name_or_scope=name_scope, initializer=initializer):
+            model = HierRNNModel(config=config, name_scope=name_scope)
+            disc_ckpt_dir = os.path.abspath(os.path.join(config.train_dir, "checkpoints"))
+            ckpt = tf.train.get_checkpoint_state(disc_ckpt_dir)
+            if ckpt and tf.train.checkpoint_exists(ckpt.model_checkpoint_path):
+                print(just("Reading Hier Disc model parameters from %s" % ckpt.model_checkpoint_path))
+                model.saver.restore(sess, ckpt.model_checkpoint_path)
+            else:
+                print(just("Created Hier Disc model with fresh parameters."))
+                disc_global_variables = [gv for gv in tf.global_variables() if name_scope in gv.name]
+                sess.run(tf.variables_initializer(disc_global_variables))
+            return model
 
     def pre_train(self):
         """
@@ -28,7 +52,7 @@ class HierRNNTrain(object):
         print(just("Begin training"))
         with tf.Session() as session:
             # ① 创建模型
-            model = self._create_model(session, self.config_disc, name_scope=self.config_disc.name_model)
+            model = self.create_model(session, self.config_disc, name_scope=self.config_disc.name_model)
 
             # ② 获取数据集
             self.query_set, \
@@ -91,6 +115,50 @@ class HierRNNTrain(object):
                     step_time, loss = 0.0, 0.0
                     sys.stdout.flush()
 
+    def step(self, sess, bucket_id, disc_model, train_query, train_answer, train_labels, forward_only=False):
+        """
+        使用包含正反例的一批数据训练判别器
+        :param sess:
+        :param bucket_id:
+        :param disc_model:
+        :param train_query: time-major
+        :param train_answer: time-major
+        :param train_labels:
+        :param forward_only:
+        :return:
+        """
+        feed_dict = {}
+
+        for i in xrange(len(train_query)):
+            feed_dict[disc_model.query[i].name] = train_query[i]
+
+        for i in xrange(len(train_answer)):
+            feed_dict[disc_model.answer[i].name] = train_answer[i]
+
+        feed_dict[disc_model.target.name] = train_labels
+
+        loss = 0.0
+        if forward_only:
+            fetches = [disc_model.b_logits[bucket_id]]  # 测试生成器：只需要获取最终结果
+            logits = sess.run(fetches, feed_dict)
+            logits = logits[0]
+        else:
+            # 训练判别器：需要执行训练、求损失等操作
+            fetches = [disc_model.b_train_op[bucket_id], disc_model.b_loss[bucket_id], disc_model.b_logits[bucket_id]]
+            train_op, loss, logits = sess.run(fetches, feed_dict)
+
+        # softmax operation
+        logits = np.transpose(softmax(np.transpose(logits)))
+
+        reward, gen_num = 0.0, 0
+        for logit, label in zip(logits, train_labels):
+            if int(label) == 0:
+                reward += logit[1]
+                gen_num += 1
+        reward = reward / gen_num  # 最终奖励是这一批数据中所有负例的奖励的平均值
+
+        return reward, loss
+
     def _get_dataset(self):
         print(just("Prepare_data"))
 
@@ -102,29 +170,6 @@ class HierRNNTrain(object):
                                for i in xrange(len(train_bucket_sizes))]
 
         return query_set, answer_set, gen_set, train_buckets_scale
-
-    def _create_model(self, sess, config, name_scope, initializer=None):
-        """
-        创建判别模型：如果已经有训练好的，读入；否则，初始化
-        :param sess:
-        :param config:
-        :param name_scope: 也就是config.name_model
-        :param initializer:
-        :return:
-        """
-        print(just("Creating disc model"))
-        with tf.variable_scope(name_or_scope=name_scope, initializer=initializer):
-            model = HierRNNModel(config=config, name_scope=name_scope)
-            disc_ckpt_dir = os.path.abspath(os.path.join(config.train_dir, "checkpoints"))
-            ckpt = tf.train.get_checkpoint_state(disc_ckpt_dir)
-            if ckpt and tf.train.checkpoint_exists(ckpt.model_checkpoint_path):
-                print(just("Reading Hier Disc model parameters from %s" % ckpt.model_checkpoint_path))
-                model.saver.restore(sess, ckpt.model_checkpoint_path)
-            else:
-                print(just("Created Hier Disc model with fresh parameters."))
-                disc_global_variables = [gv for gv in tf.global_variables() if name_scope in gv.name]
-                sess.run(tf.variables_initializer(disc_global_variables))
-            return model
 
     def _get_random_bid(self):
         """

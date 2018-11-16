@@ -30,8 +30,10 @@ class HierRNNModel(object):
     def _init_placeholders(self):
         """
         初始化模型的placeholder
+        self.query：time-major
+        self.answer：time-major
         """
-        self.global_step = tf.Variable(initial_value=0, trainable=False)
+        self.global_step = tf.Variable(initial_value=0, trainable=False) # 记录全局训练步数
         self.query = []
         self.answer = []
         for i in range(self.buckets[-1][0]):

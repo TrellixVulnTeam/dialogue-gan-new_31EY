@@ -2,12 +2,12 @@ import os
 
 # configuration options for discriminator network
 class disc_config(object):
-    max_pre_train_step = 200 # 预训练的时候最多训练多少次
+    max_pre_train_step = 30000 # 预训练的时候最多训练多少次
     batch_size = 256
     lr = 0.2
     lr_decay = 0.9
-    vocab_size = 35000
-    embed_dim = 512
+    vocab_size = 35000 # 35000
+    embed_dim = 512 # 512
     #hidden_neural_size = 128
     num_layers = 2
     train_dir = './disc_data/'
@@ -31,15 +31,15 @@ class disc_config(object):
 
 # configuration options for generator network
 class gen_config(object):
-    max_pre_train_step = 200 # 预训练的时候最多训练多少次
+    max_pre_train_step = 30000 # 预训练的时候最多训练多少次
     beam_size = 7
     learning_rate = 0.5
     learning_rate_decay_factor = 0.99
     max_gradient_norm = 5.0
     batch_size = 128
-    emb_dim = 512
+    vocab_size = 35000 # 35000
+    emb_dim = 512 # 512
     num_layers = 2
-    vocab_size = 35000
     train_dir = "./gen_data/"
     name_model = "st_model"
     tensorboard_dir = "./tensorboard/gen_log/"
@@ -51,6 +51,9 @@ class gen_config(object):
     buckets = [(5, 10), (10, 15), (20, 25), (40, 50)]
     buckets_concat = [(5, 10), (10, 15), (20, 25), (40, 50), (100, 50)]
 
+
+class adver_config(object):
+    max_train_step = 30000 # 对抗训练最多训练多少次
 
 class GSTConfig(object):
     beam_size = 7

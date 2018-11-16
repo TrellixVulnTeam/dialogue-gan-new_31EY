@@ -31,7 +31,7 @@ class GenModel(object):
 
         self.mc_search = tf.placeholder(tf.bool, name="mc_search")
         self.forward_only = tf.placeholder(tf.bool, name="forward_only")
-        self.up_reward = tf.placeholder(tf.bool, name="up_reward") # 是否将loss乘上对应的奖励
+        self.up_reward = tf.placeholder(tf.bool, name="up_reward") # 是否将loss乘上对应的奖励 TODO(Zhu) 表示是否使用强化学习方式？
         self.reward_bias = tf.get_variable("reward_bias", [1], dtype=tf.float32)
 
         self.dtype = dtype

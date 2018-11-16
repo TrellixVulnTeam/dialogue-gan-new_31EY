@@ -10,10 +10,30 @@ from six.moves import xrange
 from .gen_model import GenModel
 from .gen_data import get_dataset, get_batch
 from utils.utils import just_message as just
+import utils.data_utils as data_utils
 
 class GenTrain(object):
     def __init__(self):
         pass
+
+    @staticmethod
+    def create_model(session, gen_config, forward_only, name_scope, initializer=None):
+        """
+        创建生成模型：如果已经有训练好的，读入；否则，初始化
+        """
+        print(just("Creating Gen model: %d layers of %d units." % (gen_config.num_layers, gen_config.emb_dim)))
+        with tf.variable_scope(name_or_scope=name_scope, initializer=initializer):
+            model = GenModel(gen_config, name_scope=name_scope, forward_only=forward_only)
+            gen_ckpt_dir = os.path.abspath(os.path.join(gen_config.train_dir, "checkpoints"))
+            ckpt = tf.train.get_checkpoint_state(gen_ckpt_dir)
+            if ckpt and tf.train.checkpoint_exists(ckpt.model_checkpoint_path):
+                print(just("Reading Gen model parameters from %s" % ckpt.model_checkpoint_path))
+                model.saver.restore(session, ckpt.model_checkpoint_path)
+            else:
+                print(just("Created Gen model with fresh parameters."))
+                gen_global_variables = [gv for gv in tf.global_variables() if name_scope in gv.name]
+                session.run(tf.variables_initializer(gen_global_variables))
+            return model
 
     def pre_train(self, gen_config):
         """
@@ -24,7 +44,7 @@ class GenTrain(object):
         print(just("Begin training"))
         with tf.Session() as sess:
             # ① 创建模型
-            model = self._create_model(sess, gen_config, forward_only=False, name_scope=gen_config.name_model)
+            model = self.create_model(sess, gen_config, forward_only=False, name_scope=gen_config.name_model)
 
             # ② 获取数据集
             self.train_set, self.train_buckets_scale = self._get_dataset(gen_config)
@@ -104,7 +124,7 @@ class GenTrain(object):
         :param target_weights: 一个list，time-major权值数据，由1和0表示
         :param bucket_id:
         :param forward_only:
-        :param reward:
+        :param reward: 奖励值，判别器的返回值
         :param mc_search:
         :param up_reward:
         :return:
@@ -137,7 +157,134 @@ class GenTrain(object):
         if not forward_only:
             return outputs[1], outputs[2], outputs[0]  # Gradient norm, loss, no outputs.
         else:
+            # outputs[2:]的形状：[num_step或decoder_size, batch_size, target_vocab_size]，dtype=float32，表示每个单词的概率
             return outputs[0], outputs[1], outputs[2:]  # encoder_state, loss, outputs.
+
+    def test_model(self, gen_config):
+        """
+        交互式测试模型效果
+        :param gen_config:
+        :return:
+        """
+        with tf.Session() as sess:
+            model = self.create_model(sess, gen_config, forward_only=True, name_scope=gen_config.name_model)
+            model.batch_size = 1
+
+            train_path = os.path.join(gen_config.train_dir, "chitchat.train")
+            voc_file_path = [train_path + ".answer", train_path + ".query"]
+            vocab_path = os.path.join(gen_config.train_dir, "vocab%d.all" % gen_config.vocab_size)
+            data_utils.create_vocabulary(vocab_path, voc_file_path, gen_config.vocab_size)
+            vocab, rev_vocab = data_utils.initialize_vocabulary(vocab_path)
+
+            sys.stdout.write("> ")
+            sys.stdout.flush()
+            sentence = sys.stdin.readline()
+            while sentence:
+                token_ids = data_utils.sentence_to_token_ids(tf.compat.as_str_any(sentence), vocab)
+                print("token_id: ", token_ids)
+                bucket_id = len(gen_config.buckets) - 1
+                for i, bucket in enumerate(gen_config.buckets):
+                    if bucket[0] >= len(token_ids):
+                        bucket_id = i
+                        break
+                else:
+                    print("Sentence truncated: %s", sentence)
+
+                encoder_inputs, decoder_inputs, target_weights, _, _ = get_batch(
+                    model,
+                    {bucket_id: [(token_ids, [1])]},
+                    bucket_id, model.batch_size, type=0)
+
+                print("bucket_id: ", bucket_id)
+                print("encoder_inputs:", encoder_inputs)
+                print("decoder_inputs:", decoder_inputs)
+                print("target_weights:", target_weights)
+
+                _, _, output_logits = self.step(model, sess, encoder_inputs, decoder_inputs, target_weights, bucket_id,
+                                                 True)
+
+                print("output_logits", np.shape(output_logits))
+
+                outputs = [int(np.argmax(logit, axis=1)) for logit in output_logits]
+                print(outputs)
+                if data_utils.EOS_ID in outputs:
+                    outputs = outputs[:outputs.index(data_utils.EOS_ID)]
+
+                print(" ".join([tf.compat.as_str_any(rev_vocab[output]) for output in outputs]))
+                print("> ", end="")
+                sys.stdout.flush()
+                sentence = sys.stdin.readline()
+
+    def decoder(self, gen_config):
+        """
+        使用生成器生成一批回答，用作判别器的训练数据。这个方法是往文件里保存数据，用于预训练。
+        在对抗训练过程中，还有一个方法disc_train_data，是直接生成负例数组去训练判别器，不往文件里存
+        :param gen_config:
+        :return:
+        """
+        vocab, rev_vocab, dev_set, train_set = get_dataset(gen_config)
+
+        train_bucket_sizes = [len(train_set[b]) for b in xrange(len(gen_config.buckets))]
+        train_total_size = float(sum(train_bucket_sizes))
+        train_buckets_scale = [sum(train_bucket_sizes[:i + 1]) / train_total_size
+                               for i in xrange(len(train_bucket_sizes))]
+
+        with tf.Session() as sess:
+            model = self.create_model(sess, gen_config, forward_only=True, name_scope=gen_config.name_model)
+
+            disc_train_query = open("./disc_data/train.query", "w", encoding='utf-8')
+            disc_train_answer = open("./disc_data/train.answer", "w", encoding='utf-8')
+            disc_train_gen = open("./disc_data/train.gen", "w", encoding='utf-8')
+
+            num_step = 0
+            while num_step < 10000:
+                print("generating num_step: ", num_step)
+                random_number_01 = np.random.random_sample()
+                bucket_id = min([i for i in xrange(len(train_buckets_scale))
+                                 if train_buckets_scale[i] > random_number_01])
+
+                encoder_inputs, decoder_inputs, target_weights, batch_source_encoder, batch_source_decoder = \
+                    get_batch(model, train_set, bucket_id, gen_config.batch_size)
+
+                _, _, out_logits = self.step(model, sess, encoder_inputs, decoder_inputs, target_weights, bucket_id,
+                                              forward_only=True)
+
+                tokens = []
+                resps = []
+                for seq in out_logits:
+                    token = []
+                    for t in seq:
+                        token.append(int(np.argmax(t, axis=0)))
+                    tokens.append(token)
+                tokens_t = []
+                for col in range(len(tokens[0])):
+                    tokens_t.append([tokens[row][col] for row in range(len(tokens))])
+
+                for seq in tokens_t:
+                    if data_utils.EOS_ID in seq:
+                        resps.append(seq[:seq.index(data_utils.EOS_ID)][:gen_config.buckets[bucket_id][1]])
+                    else:
+                        resps.append(seq[:gen_config.buckets[bucket_id][1]])
+
+                for query, answer, resp in zip(batch_source_encoder, batch_source_decoder, resps):
+                    answer_str = " ".join([str(rev_vocab[an]) for an in answer][:-1]) # ["Hi", "!", <EOS>] => "Hi !"
+                    disc_train_answer.write(answer_str)
+                    disc_train_answer.write("\n")
+
+                    query_str = " ".join([str(rev_vocab[qu]) for qu in query]) # 一句问题
+                    disc_train_query.write(query_str)
+                    disc_train_query.write("\n")
+
+                    resp_str = " ".join([tf.compat.as_str(rev_vocab[output]) for output in resp]) # 一句生成的回答
+
+                    disc_train_gen.write(resp_str)
+                    disc_train_gen.write("\n")
+                num_step += 1
+
+            disc_train_gen.close()
+            disc_train_query.close()
+            disc_train_answer.close()
+        pass
 
     def _check_length(self, encoder_inputs, decoder_inputs, target_weights, encoder_size, decoder_size):
         if len(encoder_inputs) != encoder_size: # encoder_inputs是time-major，第一维是句子长度
@@ -176,24 +323,6 @@ class GenTrain(object):
         input_feed[last_target] = np.zeros([model.batch_size], dtype=np.int32)
 
         return input_feed
-
-    def _create_model(self, session, gen_config, forward_only, name_scope, initializer=None):
-        """
-        创建生成模型：如果已经有训练好的，读入；否则，初始化
-        """
-        print(just("Creating Gen model: %d layers of %d units." % (gen_config.num_layers, gen_config.emb_dim)))
-        with tf.variable_scope(name_or_scope=name_scope, initializer=initializer):
-            model = GenModel(gen_config, name_scope=name_scope, forward_only=forward_only)
-            gen_ckpt_dir = os.path.abspath(os.path.join(gen_config.train_dir, "checkpoints"))
-            ckpt = tf.train.get_checkpoint_state(gen_ckpt_dir)
-            if ckpt and tf.train.checkpoint_exists(ckpt.model_checkpoint_path):
-                print(just("Reading Gen model parameters from %s" % ckpt.model_checkpoint_path))
-                model.saver.restore(session, ckpt.model_checkpoint_path)
-            else:
-                print(just("Created Gen model with fresh parameters."))
-                gen_global_variables = [gv for gv in tf.global_variables() if name_scope in gv.name]
-                session.run(tf.variables_initializer(gen_global_variables))
-            return model
 
     def _get_dataset(self, gen_config):
         print(just("Prepare_data"))
